@@ -1,4 +1,4 @@
-# SwarmSatelliteModemMSP430
+# SwarmMSP430
 This project provides some source code to interface with Swarm M138 Satellite Modem via UART.
 
 This code has been proven on MSP430FR5994 16-bit microcontroller, but you can easily port it over to whatever controller you're using.
