@@ -23,23 +23,24 @@
 #include "xbee_hal.h"
 #include "xmesh.h"
 
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~GLOBALS~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/* - - - - - - - - - - - - - GLOBALS - - - - - - - - - - - - - - - */
 Message * satRxMsg = 0;  //pointer to message struct for message we are actively getting
 
 /* These comands will need to be responded to before satellite module is considered "initialized".
  * You'll want GPS too, but it can't be ascertained until modem is fully ready, figure that out yourself
- * If the order of these is changed, the end of the respective Parse functions need to be changed also */
+ * If the order of these is changed, the end of the respective Parse functions need to be changed also
+ * You can keep adding init commands but LEAVE "Initialized" LAST
+*/
 char cmdArrayIndex = 0;  // this index describes which init command is next to be sent
-char* initCommandArray[3] = {"$CS", "$DT @", SAT_GPIO_WAKE_LOW_HIGH};
+char* initCommandArray[4] = {"$CS", "$DT @", SAT_GPIO_WAKE_LOW_HIGH, "Initialized"};
 
 
 // initialize the global struct, if you add more things to the sctruct, add another 0
 SatInfo satInfo = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~LOCAL FUNCTIONS PROTOTYPES~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
-//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~FUNCTIONS~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
+/* - - - - - - - - - - - - - FUNCTIONS - - - - - - - - - - - - - - - */
+/* - - - - BASIC - - - - */
 void swarm_startup(void)
 {
     uart_setup(BAUD115200);                        // Swarm only uses 115200
@@ -53,37 +54,113 @@ void swarm_shutdown(void)
 {
     uart_configureRxInterrupt(UART_DISABLE_INTERRUPT);
     uart_configureTxInterrupt(UART_DISABLE_INTERRUPT);
+    uart_closeUart();
     swarm_sleep();
 }
 
-void swarm_restart(void){
-
-    swarm_sendCommand(SAT_CMD_RESTART_DEVICE, SAT_CMD_PARAM_DELETE_DB);
-
+void swarm_gpio(char pinState){
+    if(pinState){
+        GPIO_setAsOutputPin(SAT_GPIO_Port, SAT_GPIO_Pin);
+        GPIO_setOutputHighOnPin(SAT_GPIO_Port, SAT_GPIO_Pin);  // Low->High WAKES Swarm by default, unless you changed it
+    }
+    else{
+        GPIO_setAsOutputPin(SAT_GPIO_Port, SAT_GPIO_Pin);
+        GPIO_setOutputLowOnPin(SAT_GPIO_Port, SAT_GPIO_Pin);   // High->Low You can make High->Low wake if you want
+    }
 }
 
-bool swarm_isConnected(void)
+void swarm_wake(void){
+    swarm_gpio(SAT_GPIO_HIGH);                              // Low->High WAKES Swarm
+    satInfo.isSleeping = false;
+    cycleDelay_ms(20);                                         // not needed, but just in case
+}
+
+void swarm_sleep(void){
+    if(satInfo.satFullyInitialized && !satInfo.isSleeping)
+        swarm_sendCommand(SAT_CMD_SLEEP_MODE, SAT_DEFAULT_SLEEP_TIME);
+    if(SAT_GPIO_CONFIGURATION == SAT_GPIO_WAKE_LOW_HIGH)
+        swarm_gpio(SAT_GPIO_LOW);  // High->Low Doesn't sleep swarm, but it prepares for wake
+    else
+        swarm_gpio(SAT_GPIO_HIGH); // If you changed it to High->Low wake, this will change with it
+    //satInfo.isSleeping = true;  // this occurs when we receive the "$SL OK*xx" response
+}
+
+/* - - - - SENDING COMMANDS - - - - */
+void swarm_sendCommand(char* cmd_define, char* params){
+    // pass in entire command string without *checksum i.e.: "DT @"
+    Message * txCmd = 0;
+    unsigned char checksum;
+
+    // it's much easier to create a new string each time than to handle static memory when passing string literal
+    if((strlen(cmd_define)+strlen(params)+5)<=MESSAGE_BUFF_SIZE_SMALL)
+        txCmd = message_requestMsgBuff(small);
+    else
+        txCmd = message_requestMsgBuff(large);
+    message_append(txCmd, (unsigned char*)cmd_define, strlen(cmd_define));
+
+    if(*params != 0){
+        message_append(txCmd, " ", 1);
+        message_append(txCmd, (unsigned char*)params, strlen(params));
+    }
+
+    checksum = swarm_checksum((char*)txCmd->msgPtr, txCmd->dataLength);
+    message_append(txCmd, "*", 1);
+    hexByte_to_ascii(checksum, (unsigned char*)txCmd->msgPtr+txCmd->dataLength);
+    txCmd->dataLength += 2;                // increment by 2 bytes because the conversion function doesn't do this for us
+    message_append(txCmd, NEWLINE, 1);
+
+    swarm_sendData(txCmd->msgPtr, txCmd->dataLength);
+    cycleDelay_ms(10);
+
+    message_killMsg(&txCmd);
+}
+
+void swarm_sendInitCommand(void){
+
+    if(initCommandArray[cmdArrayIndex] == "Initialized"){
+        satInfo.satFullyInitialized = true;
+        satInfo.satConIsEstablished = true;
+        // This satellite module is officially initialized
+        return;
+    }
+
+    swarm_sendCommand(initCommandArray[cmdArrayIndex], SAT_CMD_PARAM_NO_PARAMS);
+}
+
+void swarm_sendData(unsigned char* data, int datalen)
 {
-	return satInfo.satConIsEstablished;
+    // This sends data to Swarm Modem, not satellite, This is used when Sending Commands
+    while(uart_isTransmitting()); // Wait until UART is free
+    cycleDelay_ms(30);
+
+    uart_send(data, datalen);
 }
 
-bool swarm_handleMsg(void)
+unsigned char swarm_checksum(const char *sz, size_t len){
+    size_t i = 0;
+    unsigned char cs;
+    if (sz [0] == '$')
+        i++;
+    for (cs = 0; (i < len) && sz [i]; i++)
+    cs ^= ((unsigned char) sz [i]);
+    return cs;
+}
+
+/* - - - - HANDLING MESSAGES - - - - */
+void swarm_handleMsg(void)
 {
     char* msgPtr;
 
     satRxMsg = message_getMsg(UART);
     if(!satRxMsg)
-        return false;
+        return;
 
     msgPtr = (char*)satRxMsg->msgPtr;  // this shortens and simplifies things
-
-    if(SAT_TESTING)
-        xmesh_sendAPITransparentTX(BROADCAST_ADDR, satRxMsg->msgPtr, satRxMsg->dataLength);
 
     if(swarm_isErrorMessage(satRxMsg)){
         swarm_handleError(msgPtr);
         message_freeMsg(satRxMsg);
-        return true;  // it was a satellite message, it was just an error
+        return;  // it was a satellite message, it was just an error
     }
     switch(msgPtr[1] << 8 | msgPtr[2]){
     case SAT_HEADER_DEVICE_INFO:
@@ -119,8 +196,31 @@ bool swarm_handleMsg(void)
         break;
     }
     message_freeMsg(satRxMsg);
+}
 
-    return true;
+bool swarm_isErrorMessage(Message* message) {
+    // If the String "ERR" is inside a response, return true
+    unsigned char ch;
+    for (ch = 0; ch < message->dataLength; ch++) {
+        if (message->msgPtr[ch] == 'R') {
+            if (message->msgPtr[ch - 2] == 'E' && message->msgPtr[ch - 1] == 'R')
+                return true;
+        }
+    }
+    if(message->msgPtr[0] == '.') // When swarm boots, it sends a bunch of data thats hard to catch, but the .'s are easy to catch
+        return true;
+    return false;
+}
+
+void swarm_handleError(char* msgPtr){
+    // Handle Errors however you see fit
+    // Options are to ignore it, parse it and handle, or to just simply notify that an error occurred
+    if(msgPtr[0] == '.'){  // module rebooted meaning we need to restart the init process on MCU side
+        satInfo.satConIsEstablished = false;
+        satInfo.satFullyInitialized = false;
+        cmdArrayIndex = 0;
+        swarm_sendInitCommand();
+    }
 }
 
 void swarm_parseSleepMessage(char* msgPtr){
@@ -216,6 +316,14 @@ void swarm_parseTransmitDataMessage(char* msgPtr){
 
 }
 
+void swarm_parseGpioMessage(char* msgPtr){
+
+    if(msgPtr[4] == 'O' && msgPtr[5] == 'K'){
+        cmdArrayIndex++;
+        swarm_sendInitCommand();
+    }
+}
+
 void swarm_parseDeviceIdMessage(char* msgPtr){
     char* idToken;
     char* idPtr;
@@ -246,18 +354,6 @@ void swarm_parseGpsMessage(char* msgPtr){
     // If we want to parse Altitude, Course, and Speed, continue the pattern
 }
 
-void swarm_parseGpioMessage(char* msgPtr){
-
-    if(msgPtr[4] == 'O' && msgPtr[5] == 'K'){
-        cmdArrayIndex++;
-        swarm_sendInitCommand();
-
-        satInfo.satFullyInitialized = true;
-        satInfo.satConIsEstablished = true;
-        // This satellite module is officially initialized
-    }
-}
-
 void swarm_parseMessageManagementMessage(char* msgPtr){
     unsigned int unsentMessages = 0;
     char* tdPtr;
@@ -272,70 +368,14 @@ void swarm_parseMessageManagementMessage(char* msgPtr){
 
 }
 
-void swarm_sendInitCommand(void){
-    swarm_sendCommand(initCommandArray[cmdArrayIndex], SAT_CMD_PARAM_NO_PARAMS);
-}
-
-void swarm_sleep(void){
-
-    swarm_sendCommand(SAT_CMD_SLEEP_MODE, SAT_DEFAULT_SLEEP_TIME);
-}
-
-unsigned char swarm_checksum(const char *sz, size_t len){
-    size_t i = 0;
-    unsigned char cs;
-    if (sz [0] == '$')
-        i++;
-    for (cs = 0; (i < len) && sz [i]; i++)
-    cs ^= ((unsigned char) sz [i]);
-    return cs;
-}
-
-void swarm_sendCommand(char* cmd_define, char* params){
-    // pass in entire command string without *checksum i.e.: "DT @"
-    Message * txCmd = 0;
-    unsigned char checksum;
-
-    // it's much easier to create a new string each time than to handle static memory when passing string literal
-    if((strlen(cmd_define)+strlen(params)+5)<=MESSAGE_BUFF_SIZE_SMALL)
-        txCmd = message_requestMsgBuff(small);
-    else
-        txCmd = message_requestMsgBuff(large);
-    message_append(txCmd, (unsigned char*)cmd_define, strlen(cmd_define));
-
-    if(*params != 0){
-        message_append(txCmd, " ", 1);
-        message_append(txCmd, (unsigned char*)params, strlen(params));
-    }
-
-    checksum = swarm_checksum((char*)txCmd->msgPtr, txCmd->dataLength);
-    message_append(txCmd, "*", 1);
-    hexByte_to_ascii(checksum, (unsigned char*)txCmd->msgPtr+txCmd->dataLength);
-    txCmd->dataLength += 2;                // increment by 2 bytes because the conversion function doesn't do this for us
-    message_append(txCmd, NEWLINE, 1);
-
-    swarm_sendData(txCmd->msgPtr, txCmd->dataLength);
-    cycleDelay_ms(10);
-
-    message_killMsg(&txCmd);
-}
-
-void swarm_sendData(unsigned char* data, int datalen)
-{
-    // This sends data to Swarm Modem, not satellite, This is used when Sending Commands
-    while(uart_isTransmitting()); // Wait until UART is free
-    cycleDelay_ms(30);
-
-    uart_send(data, datalen);
-}
-
+/* - - - - OUTGOING DATA - - - - */
 void swarm_transmitData(char* applicationID, char* holdTime, char* payload, unsigned int numberOfBytes){
-//     This transmits data to a satellite
+    // This transmits data to a satellite, data is converted to HexASCII and sent
     Message * dataBuff = 0;
     unsigned int i;
     unsigned char checksum;
 
-    dataBuff = message_requestMsgBuff(large);
+    dataBuff = message_requestMsgBuff(large);  // This can be dynamic, but it gets messing when considering all possible arguments
     if(!dataBuff)
         return;
 
@@ -353,6 +393,7 @@ void swarm_transmitData(char* applicationID, char* holdTime, char* payload, unsi
 
     hex_to_ascii((unsigned char*)payload, dataBuff->msgPtr+dataBuff->dataLength, numberOfBytes);
     dataBuff->dataLength += (numberOfBytes*2);  // increment by 2*bytes because the conversion function doesn't do this for us
+
     checksum = swarm_checksum((char*)dataBuff->msgPtr, dataBuff->dataLength);
     message_append(dataBuff, "*", 1);
     hexByte_to_ascii(checksum, dataBuff->msgPtr+dataBuff->dataLength);
@@ -364,42 +405,6 @@ void swarm_transmitData(char* applicationID, char* holdTime, char* payload, unsi
 
     satInfo.secondsSinceTransmit = 0; // initially put this inside "$TD OK" handling, but message gets deleted either way
     message_freeMsg(dataBuff);
-}
-
-void swarm_setConnectionStatus(bool trueMeansConnected){
-    // could do this like satInfo.satConIsEstablished = argument, but arg might be > 1
-    if(trueMeansConnected)
-        satInfo.satConIsEstablished = true;
-    else
-        satInfo.satConIsEstablished = false;
-}
-
-void swarm_handleError(char* msgPtr){
-
-    // Handle Errors however you see fit
-
-    // Options are to ignore it, parse it and handle, or to just simply notify that an error occurred
-    if(msgPtr[0] == '.'){  // module rebooted meaning we need to restart the init process on MCU side
-        satInfo.satConIsEstablished = false;
-        satInfo.satFullyInitialized = false;
-        cmdArrayIndex = 0;
-        swarm_sendInitCommand();
-    }
-
-}
-
-bool swarm_isErrorMessage(Message* message) {
-    // If the String "ERR" is inside a response, return true
-    unsigned char ch;
-    for (ch = 0; ch < message->dataLength; ch++) {
-        if (message->msgPtr[ch] == 'R') {
-            if (message->msgPtr[ch - 2] == 'E' && message->msgPtr[ch - 1] == 'R')
-                return true;
-        }
-    }
-    if(message->msgPtr[0] == '.') // When swarm boots, it sends a bunch of data thats hard to catch, but the .'s are easy to catch
-        return true;
-    return false;
 }
 
 

@@ -12,16 +12,22 @@
 #include "stdlib.h"
 #include "misc.h"
 
+#ifndef PINS_H
+#define SAT_GPIO_Port                                   GPIO_PORT_P8
+#define SAT_GPIO_Pin                                    BIT1
+#endif
+
 /* Configure these for your situation */
 #define SAT_UART                        EUSCI_A0_BASE
 #define SAT_RX_TIMEOUT_ms               RX_BUFF_SIZE_LARGE / 10
 #define SAT_STARTBYTE                   '$'
-#define SAT_TESTING                     true
 
 // How to Wake Swarm Modem -- SEE SWARM PRODUCT MANUAL -- Link inside INFO comments
 #define SAT_GPIO_WAKE_LOW_HIGH          "$GP 3"                         // Low->High Transition WAKES Modem
 #define SAT_GPIO_WAKE_HIGH_LOW          "$GP 4"                         // High->Low Transition WAKES Modem
 #define SAT_GPIO_CONFIGURATION          SAT_GPIO_WAKE_LOW_HIGH          // Change this as desired
+#define SAT_GPIO_HIGH                   1
+#define SAT_GPIO_LOW                    0
 
 /* INFO
  *
@@ -229,43 +235,41 @@ typedef struct{
 #define SAT_MSG_APPLICATION_ID                          "AI=7777,"   // this needs a comma after, must be integer
 
 #define SAT_DEFAULT_SLEEP_TIME                          "S=86400"    // 1 day   // sleep time can range from 5s to 31,536,000 ( 8,760 hours, 365 days )
-#define SAT_DEV_SLEEP_TIME                              "S=5"
-//#define SAT_MINIMUM_TRANSMIT_INTERVAL                   120//3600         // must transmit at least every 3600 seconds = 1 hour
 
-#define SAT_NUMBER_MAX_PACKET_BYTES_HEX                 192             // max payload is 192 hex bytes, if using ASCII, one byte will be used per NIBBLE
+#define SAT_NUMBER_MAX_PACKET_BYTES_HEX                 192          // max payload is 192 hex bytes, if using ASCII, one byte will be used per NIBBLE
 #define SAT_NUMBER_MAX_PACKET_BYTES_ASCII               SAT_NUMBER_MAX_PACKET_BYTES_HEX*2  // i.e. instead of 0x35 you will send 0x33 0x35 which is 3 and 5 in ASCII
 
 /* * * * * * * * FUNCTIONS * * * * * * * * * */
+/* Basic */
 void swarm_startup(void);
 void swarm_shutdown(void);
+void swarm_gpio(char pinState);
+void swarm_wake(void);
 void swarm_sleep(void);
-void swarm_sendData(unsigned char* data, int datalen);
 
 /* Sending Commands */
 void swarm_sendCommand(char* cmd_define, char* params);
-void swarm_transmitData(char* applicationID, char* holdTime, char* payload, unsigned int numberOfBytes);
 void swarm_sendInitCommand(void);
-void swarm_getLatest(char* cmd_define);
-void swarm_powerOff(void);
-void swarm_restart(void);
-
-/* Message Handling */
-bool swarm_handleMsg(void);
-bool swarm_isErrorMessage(Message* message);
-void swarm_parseDateTimeMessage(char* msgPtr);
-void swarm_parseModemMessage(char* msgPtr);
-void swarm_parseGpsMessage(char* msgPtr);
-void swarm_parseGpioMessage(char* msgPtr);
-void swarm_parseDeviceIdMessage(char* msgPtr);
-void swarm_parseSleepMessage(char* msgPtr);
-void swarm_parseRssiMessage(char* msgPtr);
-void swarm_parseInternalMessage(char* msgPtr);
-void swarm_parseMessageManagementMessage(char* msgPtr);
-void swarm_parseTransmitDataMessage(char*msgPtr);
-void swarm_handleError(char* msgPtr);
-
+void swarm_sendData(unsigned char* data, int datalen);
 unsigned char swarm_checksum(const char* sz, size_t len);
 
-void swarm_setConnectionStatus(bool trueMeansConnected);
+/* Message Handling */
+void swarm_handleMsg(void);
+bool swarm_isErrorMessage(Message* message);
+void swarm_handleError(char* msgPtr);
+void swarm_parseSleepMessage(char* msgPtr);
+void swarm_parseModemMessage(char* msgPtr);
+void swarm_parseRssiMessage(char* msgPtr);
+void swarm_parseDateTimeMessage(char* msgPtr);
+void swarm_parseTransmitDataMessage(char*msgPtr);
+void swarm_parseGpioMessage(char* msgPtr);
+void swarm_parseDeviceIdMessage(char* msgPtr);
+void swarm_parseGpsMessage(char* msgPtr);
+void swarm_parseMessageManagementMessage(char* msgPtr);
+
+/* Outgoing Data */
+void swarm_transmitData(char* applicationID, char* holdTime, char* payload, unsigned int numberOfBytes);
+
+
 
 #endif /* SATMODEM_H_ */
