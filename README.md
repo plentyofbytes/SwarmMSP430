@@ -9,9 +9,10 @@ Check out my other repositories for a more complete picture. If you just want th
 If you have no UART, SPI, Timer, or other code, my other repositories will definitely help you out.
 
 All of my repositories are for MSP430:
+
 -> Timer Pool Paradigm - My Timer Paradigm uses a pool of Timers to pick from as needed dynamically. Request, Start, Stop, and Kill Timers as needed. Timers use callbacks to fire Software Interrupts (SWIs) as you would see in 32 bit MCUs with RTOS's. Finding this level of sophistication on a 16-bit MCU is a treat.
 
--> Serial Data Transfer Paradigm - My Serial Transfer Paradigm allows for smooth and reliable Interrupts using Message Structs. The Message Structs provide an easy-to-use, coherant way of sending and receiving data. Message Structs are Requested, Used, and Freed/Killed as needed. Memory for Message Structs are allocated in RAM using Message.h header file.
+-> Message System Paradigm - My Serial Transfer Paradigm allows for smooth and reliable Interrupts using Message Structs. The Message Structs provide an easy-to-use, coherant way of sending and receiving data. Message Structs are Requested, Used, and Freed/Killed as needed. Memory for Message Structs are allocated in RAM using Message.h header file.
 
 Please leave feedback and submit issue tickets. 
 
