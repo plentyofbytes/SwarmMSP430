@@ -2,7 +2,7 @@
  * SatModem.c
  *
  *  Created on: Jul 26, 2022
- *      Author: AverySimon
+ *      Author: MicroTechEE
  */
 
 // STD C

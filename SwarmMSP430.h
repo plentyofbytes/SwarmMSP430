@@ -2,7 +2,7 @@
  * SatModem.h
  *
  *  Created on: Jul 26, 2022
- *      Author: AverySimon
+ *      Author: MicroTechEE
  */
 
 #ifndef SATMODEM_H_
